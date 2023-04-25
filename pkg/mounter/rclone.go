@@ -1,6 +1,7 @@
 package mounter
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path"
@@ -31,7 +32,7 @@ func newRcloneMounter(meta *s3.FSMeta, cfg *s3.Config) (Mounter, error) {
 	}, nil
 }
 
-func (rclone *rcloneMounter) Mount(target, volumeID string) error {
+func (rclone *rcloneMounter) Mount(ctx context.Context, target, volumeID string) error {
 	args := []string{
 		"mount",
 		fmt.Sprintf(":s3:%s", path.Join(rclone.meta.BucketName, rclone.meta.Prefix)),
