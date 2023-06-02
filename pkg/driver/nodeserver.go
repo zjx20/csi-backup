@@ -20,12 +20,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"regexp"
-	"strconv"
 
-	"github.com/yandex-cloud/k8s-csi-s3/pkg/mounter"
-	"github.com/yandex-cloud/k8s-csi-s3/pkg/s3"
 	"github.com/golang/glog"
+	"github.com/yandex-cloud/k8s-csi-s3/pkg/mounter"
+	"github.com/yandex-cloud/k8s-csi-s3/pkg/storage"
 	"golang.org/x/net/context"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -38,31 +36,6 @@ import (
 
 type nodeServer struct {
 	*csicommon.DefaultNodeServer
-}
-
-func getMeta(bucketName, prefix string, context map[string]string) *s3.FSMeta {
-	mountOptions := make([]string, 0)
-	mountOptStr := context[mounter.OptionsKey]
-	if mountOptStr != "" {
-		re, _ := regexp.Compile(`([^\s"]+|"([^"\\]+|\\")*")+`)
-		re2, _ := regexp.Compile(`"([^"\\]+|\\")*"`)
-		re3, _ := regexp.Compile(`\\(.)`)
-		for _, opt := range re.FindAll([]byte(mountOptStr), -1) {
-			// Unquote options
-			opt = re2.ReplaceAllFunc(opt, func(q []byte) []byte {
-				return re3.ReplaceAll(q[1 : len(q)-1], []byte("$1"))
-			})
-			mountOptions = append(mountOptions, string(opt))
-		}
-	}
-	capacity, _ := strconv.ParseInt(context["capacity"], 10, 64)
-	return &s3.FSMeta{
-		BucketName:    bucketName,
-		Prefix:        prefix,
-		Mounter:       context[mounter.TypeKey],
-		MountOptions:  mountOptions,
-		CapacityBytes: capacity,
-	}
 }
 
 func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
@@ -84,24 +57,20 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 		return nil, status.Error(codes.InvalidArgument, "Target path missing in request")
 	}
 
+	st, err := storage.GetStorage(req.GetSecrets())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get storage: %s", err)
+	}
+
 	notMnt, err := checkMount(stagingTargetPath)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	if notMnt {
 		// Staged mount is dead by some reason. Revive it
-		bucketName, prefix := volumeIDToBucketPrefix(volumeID)
-		s3, err := s3.NewClientFromSecret(req.GetSecrets())
+		err = st.MountStageVolume(ctx, volumeID, stagingTargetPath, req.VolumeContext)
 		if err != nil {
-			return nil, fmt.Errorf("failed to initialize S3 client: %s", err)
-		}
-		meta := getMeta(bucketName, prefix, req.VolumeContext)
-		mounter, err := mounter.New(meta, s3.Config)
-		if err != nil {
-			return nil, err
-		}
-		if err := mounter.Mount(stagingTargetPath, volumeID); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to stage volume: %s", err)
 		}
 	}
 
@@ -129,7 +98,7 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 		return nil, fmt.Errorf("Error running mount --bind %v %v: %s", stagingTargetPath, targetPath, out)
 	}
 
-	glog.V(4).Infof("s3: volume %s successfully mounted to %s", volumeID, targetPath)
+	glog.V(4).Infof("volume %s successfully mounted to %s", volumeID, targetPath)
 
 	return &csi.NodePublishVolumeResponse{}, nil
 }
@@ -149,7 +118,7 @@ func (ns *nodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 	if err := mounter.Unmount(targetPath); err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	glog.V(4).Infof("s3: volume %s has been unmounted.", volumeID)
+	glog.V(4).Infof("volume %s has been unmounted.", volumeID)
 
 	return &csi.NodeUnpublishVolumeResponse{}, nil
 }
@@ -157,7 +126,6 @@ func (ns *nodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
 	stagingTargetPath := req.GetStagingTargetPath()
-	bucketName, prefix := volumeIDToBucketPrefix(volumeID)
 
 	// Check arguments
 	if len(volumeID) == 0 {
@@ -179,18 +147,14 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	if !notMnt {
 		return &csi.NodeStageVolumeResponse{}, nil
 	}
-	client, err := s3.NewClientFromSecret(req.GetSecrets())
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize S3 client: %s", err)
-	}
 
-	meta := getMeta(bucketName, prefix, req.VolumeContext)
-	mounter, err := mounter.New(meta, client.Config)
+	st, err := storage.GetStorage(req.GetSecrets())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get storage: %s", err)
 	}
-	if err := mounter.Mount(stagingTargetPath, volumeID); err != nil {
-		return nil, err
+	err = st.MountStageVolume(ctx, volumeID, stagingTargetPath, req.VolumeContext)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stage volume: %s", err)
 	}
 
 	return &csi.NodeStageVolumeResponse{}, nil
@@ -222,7 +186,7 @@ func (ns *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 	if !exists {
 		err = mounter.FuseUnmount(stagingTargetPath)
 	}
-	glog.V(4).Infof("s3: volume %s has been unmounted from stage path %v.", volumeID, stagingTargetPath)
+	glog.V(4).Infof("volume %s has been unmounted from stage path %v.", volumeID, stagingTargetPath)
 
 	return &csi.NodeUnstageVolumeResponse{}, nil
 }

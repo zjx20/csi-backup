@@ -17,16 +17,10 @@ limitations under the License.
 package driver
 
 import (
-	"crypto/sha1"
-	"encoding/hex"
 	"fmt"
-	"io"
-	"path"
-	"strings"
 
-	"github.com/yandex-cloud/k8s-csi-s3/pkg/mounter"
-	"github.com/yandex-cloud/k8s-csi-s3/pkg/s3"
 	"github.com/golang/glog"
+	"github.com/yandex-cloud/k8s-csi-s3/pkg/storage"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -42,16 +36,6 @@ type controllerServer struct {
 func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
 	params := req.GetParameters()
 	capacityBytes := int64(req.GetCapacityRange().GetRequiredBytes())
-	volumeID := sanitizeVolumeID(req.GetName())
-	bucketName := volumeID
-	prefix := ""
-
-	// check if bucket name is overridden
-	if params[mounter.BucketKey] != "" {
-		bucketName = params[mounter.BucketKey]
-		prefix = volumeID
-		volumeID = path.Join(bucketName, prefix)
-	}
 
 	if err := cs.Driver.ValidateControllerServiceRequest(csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME); err != nil {
 		glog.V(3).Infof("invalid create volume req: %v", req)
@@ -59,33 +43,19 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	}
 
 	// Check arguments
-	if len(volumeID) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "Name missing in request")
-	}
 	if req.GetVolumeCapabilities() == nil {
 		return nil, status.Error(codes.InvalidArgument, "Volume Capabilities missing in request")
 	}
 
-	glog.V(4).Infof("Got a request to create volume %s", volumeID)
+	glog.V(4).Infof("Got a request to create volume %s", req.GetName())
 
-	client, err := s3.NewClientFromSecret(req.GetSecrets())
+	st, err := storage.GetStorage(req.GetSecrets())
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize S3 client: %s", err)
+		return nil, fmt.Errorf("failed to get storage: %s", err)
 	}
-
-	exists, err := client.BucketExists(bucketName)
+	volumeID, err := st.CreateVolume(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to check if bucket %s exists: %v", volumeID, err)
-	}
-
-	if !exists {
-		if err = client.CreateBucket(bucketName); err != nil {
-			return nil, fmt.Errorf("failed to create bucket %s: %v", bucketName, err)
-		}
-	}
-
-	if err = client.CreatePrefix(bucketName, prefix); err != nil {
-		return nil, fmt.Errorf("failed to create prefix %s: %v", prefix, err)
+		return nil, fmt.Errorf("failed to create volume: %s", err)
 	}
 
 	glog.V(4).Infof("create volume %s", volumeID)
@@ -107,7 +77,6 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 func (cs *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
-	bucketName, prefix := volumeIDToBucketPrefix(volumeID)
 
 	// Check arguments
 	if len(volumeID) == 0 {
@@ -120,27 +89,13 @@ func (cs *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 	}
 	glog.V(4).Infof("Deleting volume %s", volumeID)
 
-	client, err := s3.NewClientFromSecret(req.GetSecrets())
+	st, err := storage.GetStorage(req.GetSecrets())
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize S3 client: %s", err)
+		return nil, fmt.Errorf("failed to get storage: %s", err)
 	}
-
-	var deleteErr error
-	if prefix == "" {
-		// prefix is empty, we delete the whole bucket
-		if err := client.RemoveBucket(bucketName); err != nil && err.Error() != "The specified bucket does not exist" {
-			deleteErr = err
-		}
-		glog.V(4).Infof("Bucket %s removed", bucketName)
-	} else {
-		if err := client.RemovePrefix(bucketName, prefix); err != nil {
-			deleteErr = fmt.Errorf("unable to remove prefix: %w", err)
-		}
-		glog.V(4).Infof("Prefix %s removed", prefix)
-	}
-
-	if deleteErr != nil {
-		return nil, deleteErr
+	err = st.DeleteVolume(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete volume: %s", err)
 	}
 
 	return &csi.DeleteVolumeResponse{}, nil
@@ -154,20 +109,14 @@ func (cs *controllerServer) ValidateVolumeCapabilities(ctx context.Context, req 
 	if req.GetVolumeCapabilities() == nil {
 		return nil, status.Error(codes.InvalidArgument, "Volume capabilities missing in request")
 	}
-	bucketName, _ := volumeIDToBucketPrefix(req.GetVolumeId())
 
-	client, err := s3.NewClientFromSecret(req.GetSecrets())
+	st, err := storage.GetStorage(req.GetSecrets())
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize S3 client: %s", err)
+		return nil, fmt.Errorf("failed to get storage: %s", err)
 	}
-	exists, err := client.BucketExists(bucketName)
+	err = st.ValidateVolumeCapabilities(ctx, req)
 	if err != nil {
-		return nil, err
-	}
-
-	if !exists {
-		// return an error if the bucket of the requested volume does not exist
-		return nil, status.Error(codes.NotFound, fmt.Sprintf("bucket of volume with id %s does not exist", req.GetVolumeId()))
+		return nil, fmt.Errorf("failed to validate volume capabilities: %s", err)
 	}
 
 	supportedAccessMode := &csi.VolumeCapability_AccessMode{
@@ -176,7 +125,7 @@ func (cs *controllerServer) ValidateVolumeCapabilities(ctx context.Context, req 
 
 	for _, capability := range req.VolumeCapabilities {
 		if capability.GetAccessMode().GetMode() != supportedAccessMode.GetMode() {
-			return &csi.ValidateVolumeCapabilitiesResponse{Message: "Only single node writer is supported"}, nil
+			return &csi.ValidateVolumeCapabilitiesResponse{Message: "Only MULTI_NODE_MULTI_WRITER is supported"}, nil
 		}
 	}
 
@@ -193,27 +142,4 @@ func (cs *controllerServer) ValidateVolumeCapabilities(ctx context.Context, req 
 
 func (cs *controllerServer) ControllerExpandVolume(ctx context.Context, req *csi.ControllerExpandVolumeRequest) (*csi.ControllerExpandVolumeResponse, error) {
 	return &csi.ControllerExpandVolumeResponse{}, status.Error(codes.Unimplemented, "ControllerExpandVolume is not implemented")
-}
-
-func sanitizeVolumeID(volumeID string) string {
-	volumeID = strings.ToLower(volumeID)
-	if len(volumeID) > 63 {
-		h := sha1.New()
-		io.WriteString(h, volumeID)
-		volumeID = hex.EncodeToString(h.Sum(nil))
-	}
-	return volumeID
-}
-
-// volumeIDToBucketPrefix returns the bucket name and prefix based on the volumeID.
-// Prefix is empty if volumeID does not have a slash in the name.
-func volumeIDToBucketPrefix(volumeID string) (string, string) {
-	// if the volumeID has a slash in it, this volume is
-	// stored under a certain prefix within the bucket.
-	splitVolumeID := strings.SplitN(volumeID, "/", 2)
-	if len(splitVolumeID) > 1 {
-		return splitVolumeID[0], splitVolumeID[1]
-	}
-
-	return volumeID, ""
 }
