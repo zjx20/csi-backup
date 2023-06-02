@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: csi-provisioner-sa
+  name: csi-backup-provisioner-sa
   namespace: {{ .Release.Namespace }}
 ---
 kind: ClusterRole
@@ -31,7 +31,7 @@ metadata:
   name: csi-provisioner-role
 subjects:
   - kind: ServiceAccount
-    name: csi-provisioner-sa
+    name: csi-backup-provisioner-sa
     namespace: {{ .Release.Namespace }}
 roleRef:
   kind: ClusterRole
@@ -41,34 +41,34 @@ roleRef:
 kind: Service
 apiVersion: v1
 metadata:
-  name: csi-provisioner-s3
+  name: csi-backup-provisioner
   namespace: {{ .Release.Namespace }}
   labels:
-    app: csi-provisioner-s3
+    app: csi-backup-provisioner
 spec:
   selector:
-    app: csi-provisioner-s3
+    app: csi-backup-provisioner
   ports:
-    - name: csi-s3-dummy
+    - name: csi-backup-dummy
       port: 65535
 ---
 kind: StatefulSet
 apiVersion: apps/v1
 metadata:
-  name: csi-provisioner-s3
+  name: csi-backup-provisioner
   namespace: {{ .Release.Namespace }}
 spec:
-  serviceName: "csi-provisioner-s3"
+  serviceName: "csi-backup-provisioner"
   replicas: 1
   selector:
     matchLabels:
-      app: csi-provisioner-s3
+      app: csi-backup-provisioner
   template:
     metadata:
       labels:
-        app: csi-provisioner-s3
+        app: csi-backup-provisioner
     spec:
-      serviceAccount: csi-provisioner-sa
+      serviceAccount: csi-backup-provisioner-sa
       tolerations:
         - key: node-role.kubernetes.io/master
           operator: Exists
@@ -85,12 +85,12 @@ spec:
             - "--v=4"
           env:
             - name: ADDRESS
-              value: /var/lib/kubelet/plugins/ru.yandex.s3.csi/csi.sock
+              value: /var/lib/kubelet/plugins/backup.csi.dataprotection.kubeblocks.io/csi.sock
           imagePullPolicy: "IfNotPresent"
           volumeMounts:
             - name: socket-dir
-              mountPath: /var/lib/kubelet/plugins/ru.yandex.s3.csi
-        - name: csi-s3
+              mountPath: /var/lib/kubelet/plugins/backup.csi.dataprotection.kubeblocks.io
+        - name: csi-backup
           image: {{ .Values.images.csi }}
           imagePullPolicy: IfNotPresent
           args:
@@ -99,14 +99,14 @@ spec:
             - "--v=4"
           env:
             - name: CSI_ENDPOINT
-              value: unix:///var/lib/kubelet/plugins/ru.yandex.s3.csi/csi.sock
+              value: unix:///var/lib/kubelet/plugins/backup.csi.dataprotection.kubeblocks.io/csi.sock
             - name: NODE_ID
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
           volumeMounts:
             - name: socket-dir
-              mountPath: /var/lib/kubelet/plugins/ru.yandex.s3.csi
+              mountPath: /var/lib/kubelet/plugins/backup.csi.dataprotection.kubeblocks.io
       volumes:
         - name: socket-dir
           emptyDir: {}

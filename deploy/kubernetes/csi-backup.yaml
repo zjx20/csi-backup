@@ -1,40 +1,41 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: csi-s3
+  name: csi-backup-sa
   namespace: kube-system
 ---
 kind: ClusterRole
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: csi-s3
+  name: csi-backup
+rules: []
 ---
 kind: ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: csi-s3
+  name: csi-backup
 subjects:
   - kind: ServiceAccount
-    name: csi-s3
+    name: csi-backup-sa
     namespace: kube-system
 roleRef:
   kind: ClusterRole
-  name: csi-s3
+  name: csi-backup
   apiGroup: rbac.authorization.k8s.io
 ---
 kind: DaemonSet
 apiVersion: apps/v1
 metadata:
-  name: csi-s3
+  name: csi-backup
   namespace: kube-system
 spec:
   selector:
     matchLabels:
-      app: csi-s3
+      app: csi-backup
   template:
     metadata:
       labels:
-        app: csi-s3
+        app: csi-backup
     spec:
       tolerations:
         - key: CriticalAddonsOnly
@@ -42,7 +43,7 @@ spec:
         - operator: Exists
           effect: NoExecute
           tolerationSeconds: 300
-      serviceAccount: csi-s3
+      serviceAccount: csi-backup-sa
       hostNetwork: true
       containers:
         - name: driver-registrar
@@ -55,7 +56,7 @@ spec:
             - name: ADDRESS
               value: /csi/csi.sock
             - name: DRIVER_REG_SOCK_PATH
-              value: /var/lib/kubelet/plugins/ru.yandex.s3.csi/csi.sock
+              value: /var/lib/kubelet/plugins/backup.csi.dataprotection.kubeblocks.io/csi.sock
             - name: KUBE_NODE_NAME
               valueFrom:
                 fieldRef:
@@ -65,13 +66,13 @@ spec:
               mountPath: /csi
             - name: registration-dir
               mountPath: /registration/
-        - name: csi-s3
+        - name: csi-backup
           securityContext:
             privileged: true
             capabilities:
               add: ["SYS_ADMIN"]
             allowPrivilegeEscalation: true
-          image: cr.yandex/crp9ftr22d26age3hulg/csi-s3:0.35.5
+          image: registry.hub.docker.com/zjx20/csi-backup:0.35.5
           imagePullPolicy: IfNotPresent
           args:
             - "--endpoint=$(CSI_ENDPOINT)"
@@ -104,7 +105,7 @@ spec:
             type: DirectoryOrCreate
         - name: plugin-dir
           hostPath:
-            path: /var/lib/kubelet/plugins/ru.yandex.s3.csi
+            path: /var/lib/kubelet/plugins/backup.csi.dataprotection.kubeblocks.io
             type: DirectoryOrCreate
         - name: stage-dir
           hostPath:

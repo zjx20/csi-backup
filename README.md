@@ -91,7 +91,7 @@ kind: StorageClass
 apiVersion: storage.k8s.io/v1
 metadata:
   name: csi-s3-existing-bucket
-provisioner: ru.yandex.s3.csi
+provisioner: backup.csi.dataprotection.kubeblocks.io
 parameters:
   mounter: geesefs
   options: "--memory-limit 1000 --dir-mode 0777 --file-mode 0666"
@@ -150,7 +150,7 @@ You can check POSIX compatibility matrix here: https://github.com/yandex-cloud/g
 Check the logs of the provisioner:
 
 ```bash
-kubectl logs -l app=csi-provisioner-s3 -c csi-s3
+kubectl logs -l app=csi-backup-provisioner -c csi-backup -n kube-system
 ```
 
 ### Issues creating containers

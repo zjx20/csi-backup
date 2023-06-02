@@ -92,7 +92,7 @@ user_values:
       en: Name of the storage class that will be created
       ru: Название класса хранения, который будет создан при установке
     string_value:
-      default_value: csi-s3
+      default_value: csi-backup
   - name: secret.name
     title:
       en: Name of the secret
@@ -101,13 +101,13 @@ user_values:
       en: Name of the secret to create or use for the storage class
       ru: Название секрета, который будет создан или использован для класса хранения
     string_value:
-      default_value: csi-s3-secret
+      default_value: csi-backup-secret
   - name: tolerations.all
     title:
       en: Tolerate all taints
       ru: Игнорировать все taint-ы
     description:
-      en: Tolerate all taints by the CSI-S3 node driver (mounter)
-      ru: Игнорировать все taint-ы узлов кластера драйвером CSI-S3, монтирующим ФС на узлах
+      en: Tolerate all taints by the CSI-BACKUP node driver (mounter)
+      ru: Игнорировать все taint-ы узлов кластера драйвером CSI-BACKUP, монтирующим ФС на узлах
     boolean_value:
       default_value: false

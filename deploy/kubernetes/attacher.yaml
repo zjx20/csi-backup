@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: csi-attacher-sa
+  name: csi-backup-attacher-sa
   namespace: kube-system
 ---
 kind: ClusterRole
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: external-attacher-runner
+  name: csi-backup-external-attacher-runner
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
@@ -34,48 +34,48 @@ rules:
 kind: ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: csi-attacher-role
+  name: csi-backup-attacher-role
 subjects:
   - kind: ServiceAccount
-    name: csi-attacher-sa
+    name: csi-backup-attacher-sa
     namespace: kube-system
 roleRef:
   kind: ClusterRole
-  name: external-attacher-runner
+  name: csi-backup-external-attacher-runner
   apiGroup: rbac.authorization.k8s.io
 ---
 # needed for StatefulSet
 kind: Service
 apiVersion: v1
 metadata:
-  name: csi-attacher-s3
+  name: csi-backup-attacher
   namespace: kube-system
   labels:
-    app: csi-attacher-s3
+    app: csi-backup-attacher
 spec:
   selector:
-    app: csi-attacher-s3
+    app: csi-backup-attacher
   ports:
-    - name: csi-s3-dummy
+    - name: dummy
       port: 65535
 ---
 kind: StatefulSet
 apiVersion: apps/v1
 metadata:
-  name: csi-attacher-s3
+  name: csi-backup-attacher
   namespace: kube-system
 spec:
-  serviceName: "csi-attacher-s3"
+  serviceName: "csi-backup-attacher"
   replicas: 1
   selector:
     matchLabels:
-      app: csi-attacher-s3
+      app: csi-backup-attacher
   template:
     metadata:
       labels:
-        app: csi-attacher-s3
+        app: csi-backup-attacher
     spec:
-      serviceAccount: csi-attacher-sa
+      serviceAccount: csi-backup-attacher-sa
       tolerations:
         - key: node-role.kubernetes.io/master
           operator: Exists
@@ -89,13 +89,13 @@ spec:
             - "--csi-address=$(ADDRESS)"
           env:
             - name: ADDRESS
-              value: /var/lib/kubelet/plugins/ru.yandex.s3.csi/csi.sock
+              value: /var/lib/kubelet/plugins/backup.csi.dataprotection.kubeblocks.io/csi.sock
           imagePullPolicy: "IfNotPresent"
           volumeMounts:
             - name: socket-dir
-              mountPath: /var/lib/kubelet/plugins/ru.yandex.s3.csi
+              mountPath: /var/lib/kubelet/plugins/backup.csi.dataprotection.kubeblocks.io
       volumes:
         - name: socket-dir
           hostPath:
-            path: /var/lib/kubelet/plugins/ru.yandex.s3.csi
+            path: /var/lib/kubelet/plugins/backup.csi.dataprotection.kubeblocks.io
             type: DirectoryOrCreate

@@ -34,7 +34,7 @@ type driver struct {
 
 var (
 	vendorVersion = "v1.34.7"
-	driverName    = "ru.yandex.s3.csi"
+	driverName    = "backup.csi.dataprotection.kubeblocks.io"
 )
 
 // New initializes the driver
